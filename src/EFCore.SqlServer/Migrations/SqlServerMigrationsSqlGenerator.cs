@@ -2692,25 +2692,41 @@ public class SqlServerMigrationsSqlGenerator : MigrationsSqlGenerator
                             addColumnOperation.DefaultValue = DateTime.MaxValue;
                         }
 
+                        var isSparse = addColumnOperation[SqlServerAnnotationNames.Sparse] as bool? == true;
+                        var isComputed = addColumnOperation.ComputedColumnSql != null;
+
+                        if ((isSparse || isComputed)
+                            && !temporalInformation.DisabledVersioning
+                            && !temporalInformation.ShouldEnableVersioning)
+                        {
+                            DisableVersioning(
+                                tableName,
+                                schema,
+                                temporalInformation,
+                                suppressTransaction,
+                                shouldEnableVersioning: true);
+                        }
+
                         // when adding sparse column to temporal table, we need to disable versioning.
                         // This is because it may be the case that HistoryTable is using compression (by default)
                         // and the add column operation fails in that situation
                         // in order to make it work we need to disable versioning (if we haven't done it already)
                         // and de-compress the HistoryTable
-                        if (addColumnOperation[SqlServerAnnotationNames.Sparse] as bool? == true)
+                        if (isSparse)
                         {
-                            if (!temporalInformation.DisabledVersioning
-                                && !temporalInformation.ShouldEnableVersioning)
-                            {
-                                DisableVersioning(
-                                    tableName,
-                                    schema,
-                                    temporalInformation,
-                                    suppressTransaction,
-                                    shouldEnableVersioning: true);
-                            }
-
                             DecompressTable(temporalInformation.HistoryTableName!, temporalInformation.HistoryTableSchema, suppressTransaction);
+                        }
+
+                        if (addColumnOperation.ComputedColumnSql != null
+                            && !temporalInformation.DisabledVersioning
+                            && !temporalInformation.ShouldEnableVersioning)
+                        {
+                            DisableVersioning(
+                                tableName,
+                                schema,
+                                temporalInformation,
+                                suppressTransaction,
+                                shouldEnableVersioning: true);
                         }
 
                         operations.Add(addColumnOperation);
@@ -2725,6 +2741,16 @@ public class SqlServerMigrationsSqlGenerator : MigrationsSqlGenerator
                             var addHistoryTableColumnOperation = CopyColumnOperation<AddColumnOperation>(addColumnOperation);
                             addHistoryTableColumnOperation.Table = temporalInformation.HistoryTableName!;
                             addHistoryTableColumnOperation.Schema = temporalInformation.HistoryTableSchema;
+
+                            if (addHistoryTableColumnOperation.ComputedColumnSql != null)
+                            {
+                                // computed columns are not allowed inside HistoryTables
+                                // but the historical computed value will be copied over to the non-computed counterpart,
+                                // as long as their names and types (including nullability) match
+                                // so we remove ComputedColumnSql info, so that the column in history table "appears normal"
+                                addHistoryTableColumnOperation.ComputedColumnSql = null;
+                            }
+
                             operations.Add(addHistoryTableColumnOperation);
                         }
                     }
@@ -2820,6 +2846,14 @@ public class SqlServerMigrationsSqlGenerator : MigrationsSqlGenerator
 
                     if (temporalInformation.IsTemporalTable)
                     {
+                        if (alterColumnOperation.OldColumn.ComputedColumnSql != alterColumnOperation.ComputedColumnSql)
+                        {
+                            throw new NotSupportedException(
+                                SqlServerStrings.TemporalMigrationModifyingComputedColumnNotSupported(
+                                    alterColumnOperation.Name,
+                                    alterColumnOperation.Table));
+                        }
+
                         // for alter column operation converting column from nullable to non-nullable in the temporal table
                         // we must disable versioning in order to properly handle it
                         // specifically, switching values in history table from null to the default value
