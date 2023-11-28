@@ -2219,7 +2219,7 @@ public static class EntityFrameworkQueryableExtensions
         CancellationToken cancellationToken = default)
     {
         var list = new List<TSource>();
-        await foreach (var element in source.AsAsyncEnumerable().WithCancellation(cancellationToken))
+        await foreach (var element in source.AsAsyncEnumerable().WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             list.Add(element);
         }
@@ -2753,8 +2753,8 @@ public static class EntityFrameworkQueryableExtensions
     /// </exception>
     public static IQueryable<T> TagWithCallSite<T>(
         this IQueryable<T> source,
-        [NotParameterized] [CallerFilePath] string? filePath = null,
-        [NotParameterized] [CallerLineNumber] int lineNumber = 0)
+        [NotParameterized][CallerFilePath] string? filePath = null,
+        [NotParameterized][CallerLineNumber] int lineNumber = 0)
         => source.Provider is EntityQueryProvider
             ? source.Provider.CreateQuery<T>(
                 Expression.Call(
